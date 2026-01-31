@@ -1,0 +1,35 @@
+name: CCwGTV-HD Build Engine
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build-v7:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d # Modern NDK for Android 14 compatibility
+
+      - name: Compile Loader & Payloads
+        run: |
+          # The toolchain for ARM-v7 (32-bit) on Android 14
+          CLANG=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi34-clang
+          
+          # 1. Build the Loader (The PS5-style listener)
+          $CLANG -fPIE -pie -O3 loader.c -o loader_v7
+          
+          # 2. Build any payloads in the folder
+          mkdir -p bin
+          $CLANG -fPIE -pie -O3 payloads/hello_tv.c -o bin/hello_tv_v7
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-hd-binaries
+          path: |
+            loader_v7
+            bin/
