@@ -1,0 +1,58 @@
+name: CCwGTV-HD Build Engine
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-v7:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: true
+
+      - name: Compile & Strip
+        run: |
+          TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
+          CLANG=$TOOLCHAIN/armv7a-linux-androideabi34-clang
+          STRIP=$TOOLCHAIN/llvm-strip
+          
+          mkdir -p bin
+          
+          # -Oz: Aggressive size optimization
+          # -flto: Link Time Optimization for better performance
+          # -s: Remove symbol table during linking
+          FLAGS="-fPIE -pie -Oz -flto -s -Wall -static-libstdc++"
+
+          # Compile Loader
+          if [ -f "loader.c" ]; then
+            $CLANG $FLAGS loader.c -o bin/loader_v7
+            $STRIP --strip-unneeded bin/loader_v7
+          fi
+          
+          # Compile Payloads
+          if [ -d "payloads" ]; then
+            for f in payloads/*.c; do
+              name=$(basename "$f" .c)
+              $CLANG $FLAGS "$f" -o "bin/${name}_v7"
+              $STRIP --strip-all "bin/${name}_v7"
+            done
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
