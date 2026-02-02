@@ -1,6 +1,12 @@
 name: CCwGTV-HD Build Engine
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: write # Required to create the Release
 
 jobs:
   build-v7:
@@ -12,24 +18,44 @@ jobs:
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d # Modern NDK for Android 14 compatibility
+          ndk-version: r26d # Latest stable for Android 14
+          add-to-path: true
 
       - name: Compile Loader & Payloads
         run: |
-          # The toolchain for ARM-v7 (32-bit) on Android 14
-          CLANG=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi34-clang
+          # Define the toolchain for ARM-v7 (32-bit) on Android 14 (API 34)
+          TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+          CLANG=$TOOLCHAIN/armv7a-linux-androideabi34-clang
           
-          # 1. Build the Loader (The PS5-style listener)
-          $CLANG -fPIE -pie -O3 loader.c -o loader_v7
-          
-          # 2. Build any payloads in the folder
           mkdir -p bin
-          $CLANG -fPIE -pie -O3 payloads/hello_tv.c -o bin/hello_tv_v7
+          
+          # 1. Build the Loader (Main Server)
+          if [ -f "loader.c" ]; then
+            echo "Compiling Loader..."
+            $CLANG -fPIE -pie -O3 loader.c -o bin/loader_v7
+          fi
+          
+          # 2. Build all Payloads in the payloads folder
+          if [ -d "payloads" ]; then
+            for f in payloads/*.c; do
+              if [ -f "$f" ]; then
+                name=$(basename "$f" .c)
+                echo "Compiling payload: $name..."
+                $CLANG -fPIE -pie -O3 "$f" -o "bin/${name}_v7"
+              fi
+            done
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cc-hd-binaries
-          path: |
-            loader_v7
-            bin/
+          path: bin/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
