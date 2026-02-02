@@ -1,6 +1,12 @@
 name: CCwGTV-HD Build Engine
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-v7:
@@ -12,24 +18,41 @@ jobs:
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d # Modern NDK for Android 14 compatibility
+          ndk-version: r26d
+          add-to-path: true
 
-      - name: Compile Loader & Payloads
+      - name: Compile & Strip
         run: |
-          # The toolchain for ARM-v7 (32-bit) on Android 14
-          CLANG=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi34-clang
+          TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
+          CLANG=$TOOLCHAIN/armv7a-linux-androideabi34-clang
+          STRIP=$TOOLCHAIN/llvm-strip
           
-          # 1. Build the Loader (The PS5-style listener)
-          $CLANG -fPIE -pie -O3 loader.c -o loader_v7
-          
-          # 2. Build any payloads in the folder
           mkdir -p bin
-          $CLANG -fPIE -pie -O3 payloads/hello_tv.c -o bin/hello_tv_v7
+          
+          # -Oz: Aggressive size optimization
+          # -flto: Link Time Optimization for better performance
+          # -s: Remove symbol table during linking
+          FLAGS="-fPIE -pie -Oz -flto -s -Wall -static-libstdc++"
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+          # Compile Loader
+          if [ -f "loader.c" ]; then
+            $CLANG $FLAGS loader.c -o bin/loader_v7
+            $STRIP --strip-unneeded bin/loader_v7
+          fi
+          
+          # Compile Payloads
+          if [ -d "payloads" ]; then
+            for f in payloads/*.c; do
+              name=$(basename "$f" .c)
+              $CLANG $FLAGS "$f" -o "bin/${name}_v7"
+              $STRIP --strip-all "bin/${name}_v7"
+            done
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: cc-hd-binaries
-          path: |
-            loader_v7
-            bin/
+          tag_name: latest
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
